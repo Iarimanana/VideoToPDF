@@ -1,0 +1,15 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.venv/
+venv/
+.pytest_cache/
+.cache/
+out/
+*.pdf
+*.zip
+# large local videos: keep samples/ out of git by default
+samples/*
+!samples/README.md

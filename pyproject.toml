@@ -1,0 +1,39 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "video2book"
+version = "1.0.0"
+description = "Turn a video of book pages (slideshow / gallery swipe) into a clean PDF."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+dependencies = [
+    "numpy>=1.23",
+    "opencv-python-headless>=4.7",
+    "av>=12.0",
+    "Pillow>=9.5",
+    "img2pdf>=0.5",
+    "streamlit>=1.32",
+    "altair>=5",
+    "pandas>=1.5",
+]
+
+[project.optional-dependencies]
+ocr = ["ocrmypdf>=15"]
+plot = ["matplotlib>=3.6"]
+dev = ["pytest>=7", "matplotlib>=3.6"]
+
+[project.scripts]
+video2book = "video2book.cli:main"
+video2book-app = "video2book.launch:main"
+
+[tool.setuptools.packages.find]
+include = ["video2book*"]
+
+[tool.setuptools.package-data]
+video2book = ["*.toml"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
