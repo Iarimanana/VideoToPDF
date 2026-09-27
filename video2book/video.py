@@ -19,6 +19,7 @@ the analysis pass skips it.
 from __future__ import annotations
 
 import hashlib
+import itertools
 import os
 from dataclasses import asdict, dataclass
 from fractions import Fraction
@@ -218,9 +219,10 @@ def _to_rgb(frame: "av.VideoFrame", rotation: int) -> np.ndarray:
 class FrameReader:
     """Random access to full-colour, upright frames by pts or time.
 
-    Requests are batched: :meth:`get_by_pts` sorts the wanted timestamps and
-    decodes forward, seeking only across large gaps, so fetching many frames of
-    one video costs at most one sequential pass.
+    Requests are served by decoding forward. The decoder stays positioned
+    between calls, so asking for frames in increasing time order (as the
+    pipeline does, page after page) never re-decodes the same stretch; a seek
+    only happens to go backwards or to skip more than ``SEEK_GAP_S`` seconds.
     """
 
     SEEK_GAP_S = 3.0
@@ -230,6 +232,9 @@ class FrameReader:
         self.info = info or probe(path)
         self._container, self._stream = _open(self.path)
         self._tb = self._stream.time_base or Fraction(1, 1000)
+        self._gen = None          # live decoding iterator
+        self._last_pts = None     # pts of the last decoded frame
+        self._last_frame = None
 
     def close(self) -> None:
         try:
@@ -249,8 +254,29 @@ class FrameReader:
     def pts_to_time(self, pts: int) -> float:
         return float(pts * self._tb)
 
-    def _seek(self, pts: int) -> None:
-        self._container.seek(max(0, int(pts)), stream=self._stream, backward=True, any_frame=False)
+    def _start(self, target: int) -> None:
+        """Seek to the keyframe before ``target`` and start a new decoder."""
+        backoff = 0
+        one_s = int(1.0 / float(self._tb))
+        while True:
+            self._container.seek(max(0, int(target - backoff)), stream=self._stream, backward=True,
+                                 any_frame=False)
+            gen = self._container.decode(self._stream)
+            first = None
+            for f in gen:
+                if f.pts is not None:
+                    first = f
+                    break
+            if first is None:
+                self._gen = iter(())
+                return
+            # Seek landed after the target (imprecise index): back off further.
+            if first.pts > target and target - backoff > self.info.start_pts:
+                backoff = backoff * 2 + one_s
+                continue
+            self._gen = itertools.chain([first], gen)
+            self._last_pts = None
+            return
 
     def get_by_pts(self, pts_list: Iterable[int], progress: ProgressFn = None) -> dict[int, np.ndarray]:
         """Return ``{requested_pts: rgb_frame}``.
@@ -260,30 +286,23 @@ class FrameReader:
         """
         wanted = sorted({int(p) for p in pts_list})
         result: dict[int, np.ndarray] = {}
-        if not wanted:
-            return result
         gap = int(self.SEEK_GAP_S / float(self._tb))
-        i = 0
         rotation = self.info.rotation
-        backoff = 0
-        last_frame = None
+        i = 0
         while i < len(wanted):
             target = wanted[i]
-            self._seek(target - backoff)
-            first = True
-            restarted = False
-            advanced = False
-            for frame in self._container.decode(self._stream):
+            if self._last_frame is not None and target == self._last_pts:
+                result[target] = _to_rgb(self._last_frame, rotation)
+                i += 1
+                continue
+            live = self._gen is not None and self._last_pts is not None
+            if not (live and self._last_pts < target <= self._last_pts + gap):
+                self._start(target)
+            exhausted = True
+            for frame in self._gen:
                 if frame.pts is None:
                     continue
-                if first:
-                    first = False
-                    # Seek landed after the target (imprecise index): back off.
-                    if frame.pts > target and target - backoff > self.info.start_pts:
-                        backoff = backoff * 2 + int(1.0 / float(self._tb))
-                        restarted = True
-                        break
-                last_frame = frame
+                self._last_pts, self._last_frame = frame.pts, frame
                 if frame.pts < target:
                     continue
                 rgb = None
@@ -292,27 +311,24 @@ class FrameReader:
                         rgb = _to_rgb(frame, rotation)
                     result[wanted[i]] = rgb
                     i += 1
-                    advanced = True
                 if progress:
                     progress(i / len(wanted), f"Reading frames {i}/{len(wanted)}")
                 if i >= len(wanted):
+                    exhausted = False
                     break
                 target = wanted[i]
                 if target - frame.pts > gap:
+                    exhausted = False
                     break  # seek instead of decoding a long stretch
-            else:
+            if exhausted:
                 # End of stream: serve the remaining requests with the last frame.
-                if last_frame is not None:
-                    rgb = _to_rgb(last_frame, rotation)
-                    while i < len(wanted):
-                        result[wanted[i]] = rgb
-                        i += 1
-                break
-            if restarted:
-                continue
-            backoff = 0
-            if not advanced and i < len(wanted) and last_frame is None:
-                break  # nothing decodable
+                self._gen = None
+                if self._last_frame is None:
+                    break
+                rgb = _to_rgb(self._last_frame, rotation)
+                while i < len(wanted):
+                    result[wanted[i]] = rgb
+                    i += 1
         return result
 
     def get_at_time(self, t: float) -> tuple[int, np.ndarray]:

@@ -216,19 +216,25 @@ def find_paper(img: np.ndarray, box: Optional[Box] = None, width: int = 480) -> 
     hull = cv2.convexHull(cnt)
     rect = cv2.minAreaRect(hull)
     rect_area = max(1.0, rect[1][0] * rect[1][1])
-    if cv2.contourArea(cnt) / rect_area < 0.85:
+    rectangularity = cv2.contourArea(cnt) / rect_area
+    if rectangularity < 0.85:
         return None  # not rectangular: not a sheet of paper
     bx, by, bw, bh = cv2.boundingRect(hull)
     # A sheet of paper has a crisp outline; a blurred background fill (common
     # in slideshow apps) or a vignette does not.
-    if _edge_sharpness(small, cnt) < MIN_EDGE:
+    edge = _edge_sharpness(small, cnt)
+    if edge < MIN_EDGE:
         return None
-    # The paper must contain most of the fine detail (text, pictures).
+    # The paper must contain most of the fine detail (text, pictures) - less
+    # strictly when the outline is a crisp rectangle (a textured table around
+    # it also has strong edges).
     det = _detail_map(small)
     det = np.where(det > max(10.0, float(np.percentile(det, 75))), det, 0)  # strong edges only
     total = float(det.sum()) + 1e-6
-    inside = float(det[by:by + bh, bx:bx + bw].sum())
-    if inside / total < 0.85:
+    pad = max(2, int(0.02 * max(h, w)))  # the sheet's own outline counts as inside
+    inside = float(det[max(0, by - pad):by + bh + pad, max(0, bx - pad):bx + bw + pad].sum())
+    crisp = rectangularity >= 0.95 and edge >= 2 * MIN_EDGE
+    if inside / total < (0.6 if crisp else 0.85):
         return None
     peri = cv2.arcLength(hull, True)
     approx = cv2.approxPolyDP(hull, 0.02 * peri, True)

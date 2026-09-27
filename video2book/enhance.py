@@ -75,9 +75,10 @@ def bw_scan(img: np.ndarray, target_long_side: int = 2000) -> np.ndarray:
     return cv2.medianBlur(bw, 3)
 
 
-def apply(img: np.ndarray, preset: str = "original") -> np.ndarray:
+def apply(img: np.ndarray, preset: str = "original", preview: bool = False) -> np.ndarray:
+    """Apply a preset. ``preview=True`` skips the B&W upscaling (thumbnails)."""
     if preset == "clean":
         return clean(img)
     if preset == "bw":
-        return bw_scan(img)
+        return bw_scan(img, target_long_side=0 if preview else 2000)
     return img

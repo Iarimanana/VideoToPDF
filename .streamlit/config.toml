@@ -1,0 +1,15 @@
+# Used when running `streamlit run video2book/app.py` from this folder.
+# (`video2book-app` passes the same options on the command line.)
+[server]
+address = "localhost"
+headless = true
+maxUploadSize = 4096
+
+[browser]
+gatherUsageStats = false
+
+[client]
+toolbarMode = "minimal"
+
+[theme]
+base = "light"

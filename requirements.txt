@@ -1,0 +1,11 @@
+# Same as pyproject.toml (for `pip install -r requirements.txt`).
+numpy>=1.23
+opencv-python-headless>=4.7
+av>=14.0
+Pillow>=9.5
+img2pdf>=0.5
+streamlit>=1.50
+altair>=5
+pandas>=1.5
+# optional: searchable PDFs (also needs Tesseract + Ghostscript, see README)
+ocrmypdf>=15

@@ -423,8 +423,10 @@ class Pipeline:
     def run(self, progress: ProgressFn = None, keep_manual_from: Optional[Project] = None) -> Project:
         t0 = time.time()
         timings = {}
+        cached = self._analysis is not None or (self.cache.enabled and self.cache.analysis_path(
+            self.settings.step, self.settings.analysis_width).exists())
         a = self.analysis(_stage(progress, 0.0, 0.55))
-        timings["analysis"] = a.elapsed if a.elapsed else time.time() - t0
+        timings["analysis"] = time.time() - t0   # actual time of this run (small when cached)
         t1 = time.time()
         result = self.segments()
         pages: list = []
@@ -465,6 +467,8 @@ class Pipeline:
         timings["dedup"] = time.time() - t4
         timings["total"] = time.time() - t0
         project.timings = {k: round(v, 2) for k, v in timings.items()}
+        project.timings["analysis_cached"] = bool(cached)
+        project.timings["first_analysis"] = round(a.elapsed, 2)  # full video read, first time
         if progress:
             progress(1.0, "Done")
         return project
@@ -552,6 +556,24 @@ class Pipeline:
             img = apply_enhance(img, project.settings.enhance)
         return img
 
+    def render_preview(self, project: Project, page: Page, enhance: bool = True) -> np.ndarray:
+        """Like :meth:`render` but on the small cached thumbnail (fast, for the UI)."""
+        s = project.settings
+        th = self.thumbnail(page.image_key)
+        scale = th.shape[1] / float(self.info.width)
+        crop = None
+        if s.crop_mode == "manual" and s.manual_crop:
+            crop = manual_crop(th, s.manual_crop)
+        elif s.crop_mode == "auto" and page.crop:
+            c = CropResult.from_dict(page.crop)
+            crop = CropResult(tuple(int(round(v * scale)) for v in c.box), c.method,
+                              None if c.quad is None else c.quad * scale)
+        img = apply_crop(th, crop, s.perspective)
+        img = rotate_cw(img, page.rotation)
+        if enhance:
+            img = apply_enhance(img, s.enhance, preview=True)
+        return img
+
     def iter_rendered(self, project: Project) -> Iterator[np.ndarray]:
         for p in project.included():
             yield self.render(project, p)
@@ -617,29 +639,68 @@ class Pipeline:
         return page
 
     def check_expected(self, project: Project) -> Optional[dict]:
-        """Compare with the expected page count; suggest a sensitivity."""
+        """Compare with the expected page count; suggest a sensitivity that
+        gets closer (only if one exists)."""
         exp = project.settings.expected_pages
         if not exp:
             return None
         got = len(project.included())
         if got == exp:
             return {"ok": True, "expected": exp, "detected": got, "message": f"{got} pages, as expected."}
+        params = project.settings.segment_params()
         auto_excluded = sum(1 for p in project.pages if p.source == "auto" and not p.included)
         manual = sum(1 for p in project.pages if p.source == "manual" and p.included)
-        target = max(1, exp - manual + auto_excluded)
-        sens, count = suggest_sensitivity(self.analysis(), project.settings.segment_params(), target)
+        memo_key = (exp, json.dumps(params.to_dict(), sort_keys=True), project.segment_count, auto_excluded, manual)
+        memo = getattr(self, "_expect_memo", {})
+        if memo_key not in memo:
+            memo[memo_key] = self._suggest_for(exp, params, auto_excluded, manual)
+            self._expect_memo = memo
+        sens, predicted = memo[memo_key]
         if got < exp:
-            msg = (f"Found {got} pages but you expect {exp} ({exp - got} missing). "
-                   f"Try a higher sensitivity" )
+            msg = f"Found {got} pages but you expect {exp} ({exp - got} missing)."
         else:
-            msg = (f"Found {got} pages but you expect {exp} ({got - exp} extra). "
-                   f"Try a lower sensitivity")
-        if abs(sens - project.settings.sensitivity) > 1e-6:
-            msg += f" - {sens:.2f} would give about {count - auto_excluded + manual} pages."
+            msg = f"Found {got} pages but you expect {exp} ({got - exp} extra)."
+        out = {"ok": False, "expected": exp, "detected": got, "message": msg}
+        if predicted is not None and abs(predicted - exp) < abs(got - exp) and abs(sens - params.sensitivity) > 1e-6:
+            direction = "higher" if sens > params.sensitivity else "lower"
+            out["message"] += f" Try a {direction} sensitivity: {sens:.2f} should give about {predicted} pages."
+            out["suggested_sensitivity"] = sens
+            out["suggested_count"] = predicted
         else:
-            msg += " - no sensitivity value matches better; review the flagged pages or add/delete pages by hand."
-        return {"ok": False, "expected": exp, "detected": got, "suggested_sensitivity": sens,
-                "suggested_count": count - auto_excluded + manual, "message": msg}
+            out["message"] += (" No sensitivity setting gets closer: check the 'Worth a look' pages, "
+                               "delete extras or add missing pages from their time in the video.")
+        return out
+
+    def _suggest_for(self, expected: int, params: SegmentParams, auto_excluded: int, manual: int,
+                     max_checks: int = 6) -> tuple:
+        """Sensitivity whose page count is closest to ``expected``.
+
+        The motion signal gives segment counts instantly for every
+        sensitivity; the few most promising values are then checked with the
+        frame-verified hidden-transition step (a handful of frame reads each).
+        Returns ``(sensitivity, predicted_pages)``.
+        """
+        a = self.analysis()
+        target = expected - manual + auto_excluded
+        by_count: dict = {}
+        for sv in np.round(np.linspace(0.0, 1.0, 41), 3):
+            p = SegmentParams(**{**params.to_dict(), "sensitivity": float(sv), "threshold": None})
+            c = detect_segments(a, p).count
+            # for each count keep the sensitivity closest to the current one
+            if c not in by_count or abs(sv - params.sensitivity) < abs(by_count[c] - params.sensitivity):
+                by_count[c] = float(sv)
+        order = sorted(by_count.items(), key=lambda kv: (abs(kv[0] - target), abs(kv[1] - params.sensitivity)))
+        best = None
+        with FrameReader(self.video, self.info) as reader:
+            for _, sv in order[:max_checks]:
+                p = SegmentParams(**{**params.to_dict(), "sensitivity": sv, "threshold": None})
+                pages = len(self.refine_segments(detect_segments(a, p), reader)) - auto_excluded + manual
+                key = (abs(pages - expected), abs(sv - params.sensitivity))
+                if best is None or key < best[0]:
+                    best = (key, sv, pages)
+                if pages == expected:
+                    break
+        return (best[1], best[2]) if best else (params.sensitivity, None)
 
     # -- persistence helpers ------------------------------------------------------------
     def save_project(self, project: Project) -> Optional[str]:

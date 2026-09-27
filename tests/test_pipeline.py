@@ -84,8 +84,9 @@ def test_sensitivity_change_uses_cache(video_factory, cache_dir):
     pipe, project = run(path, cache_dir)
     pipe2 = Pipeline(path, Settings(sensitivity=0.6), cache_root=cache_dir)
     p2 = pipe2.run()
-    # loaded from the cache, not recomputed: the stored time is the original one
-    assert p2.timings["analysis"] == pytest.approx(pipe2.analysis().elapsed, abs=0.01)
+    # loaded from the cache, not recomputed
+    assert p2.timings["analysis_cached"] is True
+    assert p2.timings["analysis"] < 0.5 * max(0.2, p2.timings["first_analysis"])
     assert pipe2.analysis() is pipe2.analysis()
     assert len(p2.included()) == cfg.n_pages
 
@@ -129,6 +130,9 @@ def test_expected_pages_warning(video_factory, cache_dir):
     project = pipe.run()
     chk = pipe.check_expected(project)
     assert chk["ok"] is False and "expect" in chk["message"]
+    # A suggestion is only made if it really gets closer to the expected count.
+    if "suggested_sensitivity" in chk:
+        assert abs(chk["suggested_count"] - chk["expected"]) < abs(chk["detected"] - chk["expected"])
     project.settings.expected_pages = cfg.n_pages
     assert pipe.check_expected(project)["ok"] is True
 
