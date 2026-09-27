@@ -37,7 +37,7 @@ from . import __version__
 from .crop import CropResult, apply_crop, auto_crop, manual_crop, static_border
 from .dedup import DedupParams, classify, compare, describe, find_duplicates
 from .enhance import apply as apply_enhance
-from .export import ExportOptions, export_pdf, export_zip
+from .export import ExportOptions, best_aspect, export_pdf, export_zip
 from .extract import ExtractParams, Representative, candidate_samples, extract_frame, extract_segment
 from .motion import MotionAnalysis, analyze_motion
 from .segments import (Segment, SegmentParams, SegmentResult, _split_candidates, detect_segments,
@@ -70,7 +70,8 @@ class Settings:
     # enhancement
     enhance: str = "original"          # "original" | "clean" | "bw"
     # export
-    page_size: str = "a4"
+    page_size: str = "uniform"         # "uniform" | "fit" | "a4" | "letter"
+    fill: str = "auto"                 # padding colour: "auto" (page edge) | "white" | "black"
     dpi: int = 200
     jpeg_quality: int = 88
     ocr_lang: Optional[str] = None
@@ -85,8 +86,8 @@ class Settings:
         return ExtractParams(method=self.method)
 
     def export_options(self) -> ExportOptions:
-        return ExportOptions(page_size=self.page_size, dpi=self.dpi,
-                             jpeg_quality=self.jpeg_quality, ocr_lang=self.ocr_lang)
+        return ExportOptions(page_size=self.page_size, dpi=self.dpi, jpeg_quality=self.jpeg_quality,
+                             ocr_lang=self.ocr_lang, fill=self.fill)
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -579,10 +580,18 @@ class Pipeline:
             yield self.render(project, p)
 
     # -- export -----------------------------------------------------------------------
+    def page_aspect(self, project: Project) -> float:
+        """Common page shape (w/h) for 'same size' PDFs: the one needing the
+        least filling, measured on the small previews (fast)."""
+        shapes = (self.render_preview(project, p, enhance=False).shape for p in project.included())
+        return best_aspect(w / h for h, w in (sh[:2] for sh in shapes))
+
     def export_pdf(self, project: Project, out_path: str, progress: ProgressFn = None) -> str:
         pages = project.included()
-        return export_pdf(self.iter_rendered(project), out_path, project.settings.export_options(),
-                          total=len(pages), progress=progress)
+        opts = project.settings.export_options()
+        aspect = self.page_aspect(project) if opts.page_size == "uniform" else None
+        return export_pdf(self.iter_rendered(project), out_path, opts, total=len(pages), progress=progress,
+                          aspect=aspect)
 
     def export_zip(self, project: Project, out_path: str, fmt: str = "png", progress: ProgressFn = None) -> str:
         pages = project.included()

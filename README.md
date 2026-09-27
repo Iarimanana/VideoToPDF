@@ -108,7 +108,7 @@ Page look and PDF settings are in the left panel:
 | Setting | Options |
 |---|---|
 | **3 · Look of the pages** | *Original*, *Clean* (auto-contrast, white balance, light sharpening), *Black & white scan* (like a photocopy; small files) |
-| **4 · PDF options** | Page size *Fit to image* / *A4* / *Letter*, resolution (DPI), JPEG quality, searchable PDF (OCR) |
+| **4 · PDF options** | Page size: *Same size* (default: every page the same size, shaped to need the least filling), *Fit each image* (page sizes follow the pictures), *A4*, *Letter*; fill colour (*page edge colour*, white, black); resolution (DPI), JPEG quality, searchable PDF (OCR) |
 | **Crop** tab | *Automatic* (finds the page, removes black bars, phone buttons, background), *Same rectangle for every page* (draw it once with sliders), *No cropping*; optional **perspective correction** for pages photographed at an angle |
 
 **Save images as ZIP** exports every page as an image file instead.
@@ -231,7 +231,9 @@ Useful options (see `video2book --help` for all):
 | `--crop auto\|none\|x0,y0,x1,y1` | Cropping; manual values are fractions of the frame, e.g. `0.05,0.1,0.95,0.9` |
 | `--perspective` | Straighten pages photographed at an angle |
 | `--enhance original\|clean\|bw` | Enhancement preset |
-| `--page-size fit\|a4\|letter`, `--dpi`, `--quality` | PDF layout |
+| `--page-size uniform\|fit\|a4\|letter` | `uniform` (default): all pages the same size; the shape is chosen to need the least filling and each page is padded to it. `fit`: each page the size of its image |
+| `--fill auto\|white\|black` | Colour of that padding; `auto` (default) uses each page's own edge colour so it blends in |
+| `--dpi`, `--quality` | Resolution limit and JPEG quality |
 | `--ocr LANG` | Searchable PDF (`eng`, `fra+eng`, ...) |
 | `--zip pages.zip` | Also export the page images |
 | `--report report.json` | Machine-readable report: every page with time, status, flags, crop |
@@ -264,8 +266,9 @@ the web app: switch the left panel from **Single video** to **YouTube series**.
   If there's no 720p version, the closest lower quality is used and the report
   says so. `--height` changes the target.
 * PDFs go to `~/Video2Book/<series>/<series> - Chapter 142.pdf` (`-o` to change),
-  plus a `report.json`. By default each PDF page takes the size of its picture
-  (`--page-size a4` for A4 pages).
+  plus a `report.json`. All pages of a PDF have the same size: panels of other
+  shapes are padded with their own edge colour (`--fill white|black` to force a
+  colour, `--page-size fit` for pages that follow each panel's size).
 * Chapters that already have a PDF are skipped: just run the same command again
   after an interruption or when new chapters are out (`--force` redoes them).
 * Downloaded videos are deleted after conversion. Use `--keep-videos` if you

@@ -44,8 +44,11 @@ def build_parser() -> argparse.ArgumentParser:
     g = p.add_argument_group("PDF options (see `video2book --help`)")
     g.add_argument("--sensitivity", type=float, default=0.5)
     g.add_argument("--enhance", choices=("original", "clean", "bw"), default="original")
-    g.add_argument("--page-size", choices=("fit", "a4", "letter"), default="fit",
-                   help="default fit: each PDF page takes the size of its panel")
+    g.add_argument("--page-size", choices=("uniform", "fit", "a4", "letter"), default="uniform",
+                   help="uniform (default): every page the same size, shaped to need the least filling; "
+                        "fit: each page the size of its panel")
+    g.add_argument("--fill", choices=("auto", "white", "black"), default="auto",
+                   help="colour used to fill pages to the common size (auto: each page's edge colour)")
     g.add_argument("--dpi", type=int, default=150)
     g.add_argument("--ocr", metavar="LANG", help="searchable PDFs, e.g. eng")
     p.add_argument("-q", "--quiet", action="store_true")
@@ -92,7 +95,7 @@ def main(argv=None) -> int:
             say(f"  Chapter {c.label}: {c.video.title}  {c.video.url}{alt}  {done}")
         return 0
 
-    settings = Settings(sensitivity=args.sensitivity, enhance=args.enhance, page_size=args.page_size,
+    settings = Settings(sensitivity=args.sensitivity, enhance=args.enhance, page_size=args.page_size, fill=args.fill,
                         dpi=args.dpi, ocr_lang=args.ocr)
     results = []
     for i, c in enumerate(chapters, 1):

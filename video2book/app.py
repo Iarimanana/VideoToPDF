@@ -19,7 +19,7 @@ import streamlit as st
 from video2book import __version__
 from video2book.crop import CropResult
 from video2book.enhance import PRESET_LABELS, PRESETS
-from video2book.export import PAGE_SIZE_LABELS, ocr_status, tesseract_languages
+from video2book.export import FILL_LABELS, PAGE_SIZE_LABELS, ocr_status, tesseract_languages
 from video2book.project import Pipeline, Project, Settings, default_cache_root
 
 st.set_page_config(page_title="Video2Book", page_icon="📖", layout="wide")
@@ -160,7 +160,8 @@ def act_request(what: str, value=None) -> None:
 WIDGET_FIELDS = {  # widget key -> settings field
     "w_sensitivity": "sensitivity", "w_min_duration": "min_duration", "w_step": "step",
     "w_method": "method", "w_dedup": "dedup", "w_crop_mode": "crop_mode", "w_perspective": "perspective",
-    "w_enhance": "enhance", "w_page_size": "page_size", "w_dpi": "dpi", "w_quality": "jpeg_quality",
+    "w_enhance": "enhance", "w_page_size": "page_size", "w_fill": "fill", "w_dpi": "dpi",
+    "w_quality": "jpeg_quality",
 }
 
 
@@ -314,8 +315,14 @@ def sidebar() -> None:
         st.caption("Cropping is set in the **Crop** tab.")
 
     with sb.expander("4 · PDF options", expanded=False):
-        st.radio("Page size", list(PAGE_SIZE_LABELS), key="w_page_size", horizontal=True,
-                 format_func=lambda k: PAGE_SIZE_LABELS[k], on_change=act_setting, args=("page_size", "w_page_size"))
+        st.radio("Page size", list(PAGE_SIZE_LABELS), key="w_page_size",
+                 format_func=lambda k: PAGE_SIZE_LABELS[k], on_change=act_setting, args=("page_size", "w_page_size"),
+                 help="Same size: every page gets the same size; its shape is chosen to need the least "
+                      "filling. Fit each image: page sizes follow the images.")
+        st.selectbox("Fill colour", list(FILL_LABELS), key="w_fill", format_func=lambda k: FILL_LABELS[k],
+                     on_change=act_setting, args=("fill", "w_fill"), disabled=S.w_page_size == "fit",
+                     help="Colour of the filling added to reach the common page size. 'Page edge colour' "
+                          "blends in (white paper stays white, dark pictures get dark filling).")
         st.slider("Resolution (DPI)", 72, 600, step=4, key="w_dpi", on_change=act_setting, args=("dpi", "w_dpi"),
                   help="Maximum image resolution on the page (images are never enlarged).")
         st.slider("JPEG quality", 40, 100, key="w_quality", on_change=act_setting, args=("jpeg_quality", "w_quality"))

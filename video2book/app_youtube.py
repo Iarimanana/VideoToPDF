@@ -10,7 +10,7 @@ import pandas as pd
 import streamlit as st
 
 from video2book.enhance import PRESET_LABELS, PRESETS
-from video2book.export import PAGE_SIZE_LABELS
+from video2book.export import FILL_LABELS, PAGE_SIZE_LABELS
 from video2book.project import Settings
 from video2book import youtube as yt
 
@@ -50,7 +50,7 @@ def _find() -> None:
 
 def _settings() -> Settings:
     return Settings(sensitivity=float(S.yt_sensitivity), enhance=S.yt_enhance, page_size=S.yt_page_size,
-                    dpi=150)
+                    fill=S.yt_fill, dpi=150)
 
 
 def _convert(chapters: list, series: str, channel: str) -> None:
@@ -104,7 +104,8 @@ def render() -> None:
     S.setdefault("yt_cookies", "(none)")
     S.setdefault("yt_sensitivity", 0.5)
     S.setdefault("yt_enhance", "original")
-    S.setdefault("yt_page_size", "fit")
+    S.setdefault("yt_page_size", "uniform")
+    S.setdefault("yt_fill", "auto")
 
     st.title("📺 YouTube series → PDFs")
     st.caption("Finds the videos titled like “Series (Chapter N)” on a channel, downloads them at 720p "
@@ -135,7 +136,9 @@ def render() -> None:
         o[2].slider("Detection sensitivity", 0.0, 1.0, step=0.01, key="yt_sensitivity")
         o[2].selectbox("Page look", PRESETS, key="yt_enhance", format_func=lambda p: PRESET_LABELS[p])
         o[2].selectbox("PDF page size", list(PAGE_SIZE_LABELS), key="yt_page_size",
-                       format_func=lambda k: PAGE_SIZE_LABELS[k] + (" (each page = its panel)" if k == "fit" else ""))
+                       format_func=lambda k: PAGE_SIZE_LABELS[k])
+        o[2].selectbox("Fill colour", list(FILL_LABELS), key="yt_fill", format_func=lambda k: FILL_LABELS[k],
+                       disabled=S.yt_page_size == "fit")
 
     if st.button("Find chapters", type="primary"):
         _find()

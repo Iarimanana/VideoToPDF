@@ -354,9 +354,9 @@ def process_chapter(ch: Chapter, series: str, out_dir: str, settings: Optional[S
 
 
 def default_settings() -> Settings:
-    """Video2Book defaults, but each PDF page takes the size of its panel
-    (comic panels vary in shape; A4 would add large white margins)."""
-    return Settings(page_size="fit", dpi=150)
+    """Video2Book defaults: every PDF page the same size (comic panels vary in
+    shape; each is padded with its own edge colour to the common shape)."""
+    return Settings(page_size="uniform", fill="auto", dpi=150)
 
 
 def write_report(results: list, folder: Path, series: str, channel: str) -> Path:

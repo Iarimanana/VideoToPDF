@@ -116,9 +116,9 @@ def test_review_edits_and_export(video_factory, cache_dir, tmp_path):
     pdf = pipe.export_pdf(project2, str(tmp_path / "book.pdf"))
     with pikepdf.open(pdf) as doc:
         assert len(doc.pages) == len(project2.included())
-        box = [float(v) for v in doc.pages[0].mediabox]
-        w, h = box[2] - box[0], box[3] - box[1]
-        assert {round(w), round(h)} == {595, 842}  # A4 (rotated page may be landscape)
+        # default: every page the same size (the rotated page is padded, not a different page size)
+        boxes = {tuple(round(float(v), 2) for v in pg.mediabox) for pg in doc.pages}
+        assert len(boxes) == 1
     z = pipe.export_zip(project2, str(tmp_path / "pages.zip"))
     with zipfile.ZipFile(z) as zz:
         assert len(zz.namelist()) == len(project2.included())

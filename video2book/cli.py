@@ -83,7 +83,11 @@ def build_parser() -> argparse.ArgumentParser:
     g.add_argument("--enhance", choices=("original", "clean", "bw"), default="original",
                    help="enhancement preset")
     g = p.add_argument_group("export")
-    g.add_argument("--page-size", choices=("fit", "a4", "letter"), default="a4")
+    g.add_argument("--page-size", choices=("uniform", "fit", "a4", "letter"), default="uniform",
+                   help="uniform: every page the same size, shaped to need the least filling; "
+                        "fit: each page the size of its image")
+    g.add_argument("--fill", choices=("auto", "white", "black"), default="auto",
+                   help="colour used to fill pages to the common size (auto: each page's edge colour)")
     g.add_argument("--dpi", type=int, default=200)
     g.add_argument("--quality", type=int, default=88, help="JPEG quality (1-100)")
     g.add_argument("--zip", metavar="FILE", help="also save the page images as a ZIP")
@@ -117,7 +121,7 @@ def main(argv=None) -> int:
         step=args.step, sensitivity=args.sensitivity, threshold=args.threshold,
         min_duration=args.min_duration, method=args.method, dedup=not args.no_dedup,
         crop_mode=crop_mode, manual_crop=crop_rel, perspective=args.perspective,
-        enhance=args.enhance, page_size=args.page_size, dpi=args.dpi, jpeg_quality=args.quality,
+        enhance=args.enhance, page_size=args.page_size, fill=args.fill, dpi=args.dpi, jpeg_quality=args.quality,
         ocr_lang=args.ocr, expected_pages=args.expected_pages,
     )
     say = (lambda *a: None) if args.quiet else (lambda *a: print(*a))
