@@ -245,10 +245,18 @@ def do_redetect() -> None:
 
 # -- sidebar -----------------------------------------------------------------------
 
-def sidebar() -> None:
+def sidebar_header() -> str:
     sb = st.sidebar
     sb.title("📖 Video2Book")
     sb.caption("Turn a video of book pages into a PDF. Runs entirely on this computer.")
+    sb.radio("Mode", ["Single video", "YouTube series"], key="mode", horizontal=True,
+             label_visibility="collapsed",
+             help="YouTube series: download the chapter videos of a series from a channel and make one PDF each.")
+    return S.mode
+
+
+def sidebar() -> None:
+    sb = st.sidebar
     project = S.get("project")
     with sb.expander("1 · Open a video", expanded=project is None):
         st.text_input("Folder", key="w_folder", help="A folder on this computer that contains your video.")
@@ -793,15 +801,21 @@ folder shown at the bottom of the left panel; delete it any time to free space.
 
 def main() -> None:
     S.setdefault("w_folder", default_folder())
+    S.setdefault("mode", "Single video")
     # Long actions run before any widget is drawn (they may reset widget values).
     if S.get("to_open"):
         path = S.pop("to_open")
+        S.mode = "Single video"
         do_open(path)
         st.rerun()
     if S.get("redetect") and S.get("project") is not None:
         S.redetect = False
         do_redetect()
         st.rerun()
+    if sidebar_header() == "YouTube series":
+        from video2book import app_youtube
+        app_youtube.render()
+        return
     sidebar()
     project = S.get("project")
     if project is None:

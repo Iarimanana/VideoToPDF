@@ -19,6 +19,7 @@ offline, and nothing is uploaded anywhere.
 4. [Searchable PDF with OCR (optional)](#4-searchable-pdf-with-ocr-optional)
 5. [About ffmpeg](#5-about-ffmpeg)
 6. [Command line (fully automatic)](#6-command-line-fully-automatic)
+   - [A whole series from a YouTube channel (yt2book)](#a-whole-series-from-a-youtube-channel-yt2book)
 7. [How it works](#7-how-it-works)
 8. [Troubleshooting and tips](#8-troubleshooting-and-tips)
 9. [Known limitations](#9-known-limitations)
@@ -238,6 +239,47 @@ Useful options (see `video2book --help` for all):
 | `--step N` | Analyse every Nth frame (faster first run on long 60 fps videos) |
 | `--no-dedup`, `--no-cache`, `--cache-dir DIR` | ... |
 
+### A whole series from a YouTube channel (yt2book)
+
+If a channel publishes a series as one video per chapter, titled like
+**"Miss Forensics (Chapter 142)"**, Video2Book can fetch the chapters and make
+one PDF per chapter:
+
+```bash
+yt2book https://www.youtube.com/@RuiNemesys "Miss Forensics" --latest 5      # the 5 latest chapters
+yt2book @RuiNemesys "Miss Forensics" --chapters 140-145                    # a range (or 3,5,9-11)
+yt2book @RuiNemesys "Miss Forensics"                                       # every chapter
+yt2book @RuiNemesys "Miss Forensics" --list                                # just show what's there
+```
+
+(From the launchers' installation, the command is `.venv/bin/yt2book` on
+macOS/Linux and `.venv\Scripts\yt2book` on Windows.) The same is available in
+the web app: switch the left panel from **Single video** to **YouTube series**.
+
+* Titles are matched loosely: `Miss Forensics - Ch. 12`, `【Miss Forensics】Chapter 12`,
+  `Miss Forensics (Chapter 12-13)` all count. A different series with a longer
+  name (`Miss Forensics 2 (Chapter 1)`) does not. If a chapter was uploaded
+  twice, the newest upload is used.
+* Each chapter is downloaded at **720p** (video only; the sound isn't needed).
+  If there's no 720p version, the closest lower quality is used and the report
+  says so. `--height` changes the target.
+* PDFs go to `~/Video2Book/<series>/<series> - Chapter 142.pdf` (`-o` to change),
+  plus a `report.json`. By default each PDF page takes the size of its picture
+  (`--page-size a4` for A4 pages).
+* Chapters that already have a PDF are skipped: just run the same command again
+  after an interruption or when new chapters are out (`--force` redoes them).
+* Downloaded videos are deleted after conversion. Use `--keep-videos` if you
+  want to fix pages later in the review screen.
+* If YouTube answers "Sign in to confirm you're not a bot", add
+  `--cookies-from-browser firefox` (or `chrome`...) to use the login of a
+  browser where you're signed in to YouTube.
+* The channel's video list is cached for 6 hours (`--refresh` to re-read it).
+  `--latest N` doesn't read the whole channel: it stops shortly after finding
+  N chapters.
+
+Downloading YouTube videos is against YouTube's terms of service; use this only
+for your own personal reading, and support the creators and publishers.
+
 ---
 
 ## 7. How it works
@@ -336,6 +378,8 @@ video2book/
   project.py    Pipeline (cache, run, edits, render, export) and Project state (JSON)
   cli.py        `video2book` command
   app.py        Streamlit UI;  launch.py: `video2book-app`
+  youtube.py    channel listing, chapter title matching, 720p download, per-chapter conversion
+  yt_cli.py     `yt2book` command;  app_youtube.py: the "YouTube series" page
   synthetic.py  synthetic test video generator
 scripts/make_synthetic_video.py
 tests/          pytest suite (unit + end-to-end on generated videos)
