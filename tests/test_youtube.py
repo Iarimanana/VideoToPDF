@@ -165,3 +165,72 @@ def test_cli_list_and_convert(fake_downloader, tmp_path, monkeypatch, cache_dir,
     assert sorted(p.name for p in folder.glob("*.pdf")) == ["Miss Forensics - Chapter 011.pdf",
                                                             "Miss Forensics - Chapter 012.pdf"]
     assert (folder / "report.json").exists()
+
+
+# -- which quality is downloaded -----------------------------------------------------
+
+from video2book.youtube import choose_format, quality  # noqa: E402
+
+
+def fmt(fid, w, h, vcodec="avc1.4d401f", acodec="none", tbr=1000, **kw):
+    return {"format_id": fid, "width": w, "height": h, "vcodec": vcodec, "acodec": acodec, "tbr": tbr, **kw}
+
+
+STORYBOARD = {"format_id": "sb0", "width": 320, "height": 180, "vcodec": "none", "acodec": "none",
+              "format_note": "storyboard"}
+
+
+def test_exactly_720_preferred_h264_video_only():
+    formats = [STORYBOARD, fmt("18", 640, 360, acodec="mp4a"), fmt("247", 1280, 720, "vp9", tbr=1500),
+               fmt("136", 1280, 720, "avc1.4d401f", tbr=1200), fmt("22", 1280, 720, acodec="mp4a", tbr=2000),
+               fmt("137", 1920, 1080)]
+    assert choose_format(formats)["format_id"] == "136"
+
+
+def test_no_720_takes_closest_above_not_best():
+    formats = [fmt("135", 854, 480), fmt("137", 1920, 1080), fmt("271", 2560, 1440, "vp9"),
+               fmt("313", 3840, 2160, "vp9")]
+    assert choose_format(formats)["format_id"] == "137"
+
+
+def test_nothing_above_takes_closest_below():
+    formats = [fmt("160", 256, 144), fmt("134", 640, 360), fmt("135", 854, 480), STORYBOARD]
+    assert choose_format(formats)["format_id"] == "135"
+
+
+def test_quality_is_the_shorter_side():
+    # portrait / 4:5 videos: YouTube's "720p" is 720 wide
+    assert quality(fmt("x", 720, 1280)) == 720 and quality(fmt("y", 720, 900)) == 720
+    formats = [fmt("a", 720, 900), fmt("b", 576, 720), fmt("c", 1080, 1350)]
+    assert choose_format(formats)["format_id"] == "a"
+
+
+def test_combined_streams_used_when_no_video_only():
+    formats = [fmt("18", 640, 360, acodec="mp4a"), fmt("22", 1280, 720, acodec="mp4a")]
+    assert choose_format(formats)["format_id"] == "22"
+    assert choose_format([STORYBOARD]) is None
+
+
+def test_other_target_height():
+    formats = [fmt("135", 854, 480), fmt("136", 1280, 720), fmt("137", 1920, 1080)]
+    assert choose_format(formats, 540)["format_id"] == "136"
+    assert choose_format(formats, 2160)["format_id"] == "137"
+
+
+def test_yt_dlp_uses_our_choice():
+    """yt-dlp's own format-selection machinery calls our selector (offline:
+    a fake video description, nothing is downloaded)."""
+    from yt_dlp import YoutubeDL
+
+    def selector(ctx):
+        f = choose_format(ctx.get("formats") or [], 720)
+        if f is not None:
+            yield f
+
+    formats = [dict(f, url=f"https://example.invalid/{f['format_id']}", ext="mp4", protocol="https")
+               for f in (fmt("135", 854, 480), fmt("137", 1920, 1080), fmt("271", 2560, 1440, "vp9"))]
+    info = {"id": "abc", "title": "Miss Forensics (Chapter 1)", "formats": formats, "extractor": "fake",
+            "extractor_key": "Fake", "webpage_url": "https://example.invalid/abc"}
+    with YoutubeDL({"format": selector, "quiet": True, "simulate": True}) as ydl:
+        out = ydl.process_ie_result(info, download=False)
+    assert out["format_id"] == "137" and quality(out) == 1080

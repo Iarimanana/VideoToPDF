@@ -109,7 +109,7 @@ def render() -> None:
 
     st.title("📺 YouTube series → PDFs")
     st.caption("Finds the videos titled like “Series (Chapter N)” on a channel, downloads them at 720p "
-               "(or the closest lower quality) and makes one PDF per chapter. Chapters already converted "
+               "(or the closest quality above, else below) and makes one PDF per chapter. Chapters already converted "
                "are skipped.")
     c = st.columns([3, 2])
     c[0].text_input("YouTube channel", key="yt_channel", placeholder="https://www.youtube.com/@ChannelName")
@@ -130,7 +130,8 @@ def render() -> None:
         o[0].checkbox("Redo chapters that already have a PDF", key="yt_force")
         o[0].checkbox("Re-read the channel (ignore the list cached in the last hours)", key="yt_refresh")
         o[1].number_input("Video height (p)", 144, 2160, step=1, key="yt_height",
-                          help="720 by default; if a video has no such version, the closest lower one is used.")
+                          help="720 by default. Without that version: the closest quality above, "
+                               "or if there is none above, the closest below.")
         o[1].selectbox("Use my YouTube login from", BROWSERS, key="yt_cookies",
                        help="Only needed if YouTube asks to sign in / confirm you're not a bot.")
         o[2].slider("Detection sensitivity", 0.0, 1.0, step=0.01, key="yt_sensitivity")

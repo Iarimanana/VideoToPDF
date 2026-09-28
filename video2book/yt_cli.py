@@ -33,7 +33,8 @@ def build_parser() -> argparse.ArgumentParser:
                    help="output folder; PDFs go to <output>/<series>/ (default: %(default)s)")
     p.add_argument("--list", action="store_true", help="only list the chapters found, download nothing")
     p.add_argument("--height", type=int, default=720,
-                   help="video height to download; the closest lower one is used if missing (default: 720)")
+                   help="video quality to download (default: 720). Without it: the closest quality above, "
+                        "or if there is none above, the closest below")
     p.add_argument("--keep-videos", action="store_true",
                    help="keep the downloaded videos (needed to fix pages later in the Video2Book app)")
     p.add_argument("--force", action="store_true", help="redo chapters whose PDF already exists")

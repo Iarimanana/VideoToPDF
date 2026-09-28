@@ -7,7 +7,8 @@ the web app):
 2. keep the ones titled like ``<Series> (Chapter N)``;
 3. select chapters: the latest N, a range / list, or all;
 4. download each chapter at 720p (video stream only - the audio is not
-   needed), or the closest resolution below 720p if there is no 720p version;
+   needed); without a 720p version, the closest quality above 720p, and only
+   if there is none above, the closest below;
 5. convert it with the Video2Book pipeline into ``<Series> - Chapter NNN.pdf``.
 
 Chapters whose PDF already exists are skipped, so an interrupted run can
@@ -32,11 +33,6 @@ Log = Callable[[str], None]
 ProgressFn = Optional[Callable[[float, str], None]]
 
 TARGET_HEIGHT = 720
-# Video only (Video2Book ignores sound): no audio download, no ffmpeg merge.
-# Sorting: highest resolution not above 720p first, then H.264 (fastest to
-# decode) over VP9/AV1.
-FORMAT = "bv*[height<={h}]/b[height<={h}]"
-FORMAT_SORT = ["res:{h}", "vcodec:h264"]
 LISTING_TTL_S = 6 * 3600
 
 
@@ -271,10 +267,46 @@ class ChapterResult:
     error: Optional[str] = None
 
 
+def quality(fmt: dict) -> Optional[int]:
+    """YouTube-style quality number ("720p"): the shorter side of the frame,
+    so a portrait 720x1280 video counts as 720p."""
+    w, h = fmt.get("width"), fmt.get("height")
+    if w and h:
+        return int(min(w, h))
+    return int(h) if h else None
+
+
+_CODEC_RANK = (("avc1", 3), ("h264", 3), ("vp09", 2), ("vp9", 2), ("av01", 1))
+
+
+def choose_format(formats: list, target: int = TARGET_HEIGHT) -> Optional[dict]:
+    """The format to download: exactly ``target`` if available, otherwise the
+    closest quality above it, and only if there is none above, the closest
+    below. Among equal qualities: video-only streams (the sound isn't needed),
+    then H.264 (fastest to decode), then the highest bitrate."""
+    video = [f for f in formats if f.get("vcodec") not in (None, "none") and quality(f)
+             and f.get("format_note") != "storyboard" and not f.get("has_drm")]
+    if not video:
+        return None
+    qualities = {quality(f) for f in video}
+    above = [q for q in qualities if q > target]
+    below = [q for q in qualities if q < target]
+    q = target if target in qualities else (min(above) if above else max(below))
+
+    def rank(f: dict) -> tuple:
+        codec = str(f.get("vcodec") or "")
+        return (f.get("acodec") in (None, "none"),
+                next((r for prefix, r in _CODEC_RANK if codec.startswith(prefix)), 0),
+                f.get("tbr") or f.get("vbr") or 0)
+
+    return max((f for f in video if quality(f) == q), key=rank)
+
+
 def download_video(url: str, folder: str, height: int = TARGET_HEIGHT,
                    cookies_from_browser: Optional[str] = None, progress: ProgressFn = None) -> dict:
-    """Download the video stream (no audio) at ``height`` or the closest below.
-    Returns ``{"path", "height", "vcodec", "format_id"}``."""
+    """Download the video stream (no audio) at ``height`` - or the closest
+    quality above, or else below (see :func:`choose_format`).
+    Returns ``{"path", "height", "vcodec", "format_id"}`` (height = quality, e.g. 720)."""
     from yt_dlp import YoutubeDL
 
     os.makedirs(folder, exist_ok=True)
@@ -286,16 +318,20 @@ def download_video(url: str, folder: str, height: int = TARGET_HEIGHT,
             if total:
                 progress(min(1.0, done / total), f"Downloading {done / 1e6:.0f}/{total / 1e6:.0f} MB")
 
-    opts = {**_ydl_base_opts(cookies_from_browser),
-            "format": FORMAT.format(h=height), "format_sort": [s.format(h=height) for s in FORMAT_SORT],
-            "outtmpl": {"default": os.path.join(folder, "%(id)s.%(height)sp.%(ext)s")},
+    def selector(ctx: dict):
+        f = choose_format(ctx.get("formats") or [], height)
+        if f is not None:
+            yield f
+
+    opts = {**_ydl_base_opts(cookies_from_browser), "format": selector,
+            "outtmpl": {"default": os.path.join(folder, "%(id)s.%(format_id)s.%(ext)s")},
             "progress_hooks": [hook], "concurrent_fragment_downloads": 4, "overwrites": False}
     with YoutubeDL(opts) as ydl:
         info = ydl.extract_info(url, download=True)
         req = (info.get("requested_downloads") or [info])[0]
         path = req.get("filepath") or req.get("_filename") or ydl.prepare_filename(info)
-    return {"path": path, "height": info.get("height") or req.get("height"),
-            "vcodec": info.get("vcodec") or req.get("vcodec"), "format_id": info.get("format_id")}
+    return {"path": path, "height": quality(req) or quality(info),
+            "vcodec": req.get("vcodec") or info.get("vcodec"), "format_id": req.get("format_id") or info.get("format_id")}
 
 
 def series_folder(out_dir: str, series: str) -> Path:

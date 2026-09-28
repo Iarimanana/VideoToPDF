@@ -263,8 +263,10 @@ the web app: switch the left panel from **Single video** to **YouTube series**.
   name (`Miss Forensics 2 (Chapter 1)`) does not. If a chapter was uploaded
   twice, the newest upload is used.
 * Each chapter is downloaded at **720p** (video only; the sound isn't needed).
-  If there's no 720p version, the closest lower quality is used and the report
-  says so. `--height` changes the target.
+  If there's no 720p version, the closest quality **above** is used (e.g. 1080p),
+  and only if there is nothing above 720p, the closest one below; the report
+  says so. "720p" means YouTube's label (the shorter side of the picture, so
+  portrait videos count correctly). `--height` changes the target.
 * PDFs go to `~/Video2Book/<series>/<series> - Chapter 142.pdf` (`-o` to change),
   plus a `report.json`. All pages of a PDF have the same size: panels of other
   shapes are padded with their own edge colour (`--fill white|black` to force a
