@@ -1,17 +1,24 @@
-"""Turn a series of chapter videos on a YouTube channel into PDFs.
+"""Turn the chapter videos of a series - from a YouTube channel or a playlist -
+into PDFs.
 
 Workflow (``yt2book`` on the command line, or the "YouTube series" page of
 the web app):
 
-1. list the channel's videos (newest first) with yt-dlp, without downloading;
-2. keep the ones titled like ``<Series> (Chapter N)``;
-3. select chapters: the latest N, a range / list, or all;
-4. download each chapter at 720p (video stream only - the audio is not
+1. list the videos with yt-dlp, without downloading: a channel's Videos tab
+   (newest first), or a playlist (in playlist order);
+2. keep the ones titled like ``<Series> (Chapter N)``. For a playlist the
+   series title is optional: without it every video of the playlist is used,
+   ordered by its chapter number when the title has one ("Chapter 12",
+   "Ep. 3"...), otherwise by its position in the playlist;
+3. select: the latest N, a chapter range / list, or all;
+4. download each one at 720p (video stream only - the audio is not
    needed); without a 720p version, the closest quality above 720p, and only
    if there is none above, the closest below;
-5. convert it with the Video2Book pipeline into ``<Series> - Chapter NNN.pdf``.
+5. convert it with the Video2Book pipeline into ``<Name> - Chapter NNN.pdf``
+   (or ``<Name> - NNN - <video title>.pdf`` for videos without a chapter
+   number, NNN being the playlist position).
 
-Chapters whose PDF already exists are skipped, so an interrupted run can
+Videos whose PDF already exists are skipped, so an interrupted run can
 simply be started again. Downloaded videos are deleted after a successful
 conversion unless ``keep_videos`` is set.
 """
@@ -23,6 +30,7 @@ import os
 import re
 import time
 import unicodedata
+from urllib.parse import parse_qs, urlparse
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Callable, Iterable, Iterator, Optional
@@ -75,6 +83,24 @@ def parse_chapter(title: str, series: str) -> Optional[tuple]:
     return (a, b)
 
 
+_ANY_CHAPTER = re.compile(
+    r"(?:^|[^a-z0-9])(?:chapter|chap|ch|episode|ep)\.?\s*(\d+(?:\.\d+)?)"
+    r"(?:\s*(?:-|~|to|&|and|\+)\s*(?:chapter|ch\.?)?\s*(\d+(?:\.\d+)?))?(?![0-9])")
+
+
+def parse_any_chapter(title: str) -> Optional[tuple]:
+    """``(first, last)`` chapter numbers from any title ("... (Chapter 12)",
+    "Ep. 3", "Ch 10-11"), whatever the series name. None if there is none."""
+    m = _ANY_CHAPTER.search(normalize(title))
+    if not m:
+        return None
+    a = float(m.group(1))
+    b = float(m.group(2)) if m.group(2) else a
+    if b < a or b - a > 20:
+        b = a
+    return (a, b)
+
+
 def fmt_num(x: float) -> str:
     return str(int(x)) if float(x).is_integer() else str(x)
 
@@ -123,14 +149,21 @@ def _ydl_base_opts(cookies_from_browser: Optional[str] = None) -> dict:
     return opts
 
 
-def iter_channel_videos(channel: str, cookies_from_browser: Optional[str] = None) -> Iterator[ChannelVideo]:
-    """Videos of a channel, newest first, fetched page by page (lazily)."""
+UNAVAILABLE_TITLES = {"[deleted video]", "[private video]", "[unavailable video]"}
+
+
+def _iter_flat(url: str, cookies_from_browser: Optional[str] = None,
+               meta: Optional[dict] = None) -> Iterator[ChannelVideo]:
+    """Entries of a channel tab or playlist, fetched page by page (lazily).
+    The list's title is stored in ``meta["title"]`` when given."""
     from yt_dlp import YoutubeDL
 
     opts = {**_ydl_base_opts(cookies_from_browser), "extract_flat": "in_playlist", "skip_download": True,
             "lazy_playlist": True}
     with YoutubeDL(opts) as ydl:
-        info = ydl.extract_info(channel_videos_url(channel), download=False, process=False)
+        info = ydl.extract_info(url, download=False, process=False)
+        if meta is not None:
+            meta["title"] = info.get("title")
         for i, e in enumerate(info.get("entries") or []):
             if not e or not e.get("id"):
                 continue
@@ -140,44 +173,135 @@ def iter_channel_videos(channel: str, cookies_from_browser: Optional[str] = None
                                else f"https://www.youtube.com/watch?v={vid}")
 
 
-def _listing_cache(channel: str) -> Path:
-    key = re.sub(r"[^a-z0-9]+", "_", channel_videos_url(channel).lower())[-80:]
+def iter_channel_videos(channel: str, cookies_from_browser: Optional[str] = None) -> Iterator[ChannelVideo]:
+    """Videos of a channel, newest first, fetched page by page (lazily)."""
+    return _iter_flat(channel_videos_url(channel), cookies_from_browser)
+
+
+def iter_playlist_videos(playlist: str, cookies_from_browser: Optional[str] = None,
+                         meta: Optional[dict] = None) -> Iterator[ChannelVideo]:
+    """Videos of a playlist, in playlist order (``index`` = position, 0-based)."""
+    return _iter_flat(playlist_url(playlist), cookies_from_browser, meta)
+
+
+def usable(v: ChannelVideo) -> bool:
+    return v.title.strip().lower() not in UNAVAILABLE_TITLES
+
+
+# -- playlists -------------------------------------------------------------------------
+
+_PLAYLIST_ID = re.compile(r"^(PL|UU|OL|FL|LL|RD|UL|PU)[A-Za-z0-9_-]{10,}$")
+
+
+def playlist_id(source: str) -> Optional[str]:
+    """The playlist id in a playlist link (or a video link with ``&list=``),
+    or a bare playlist id; None for anything else (e.g. a channel)."""
+    s = source.strip()
+    if _PLAYLIST_ID.match(s):
+        return s
+    if not re.match(r"^https?://", s):
+        if "youtube.com/" in s or "youtu.be/" in s:
+            s = "https://" + s
+        else:
+            return None
+    q = parse_qs(urlparse(s).query)
+    ids = q.get("list")
+    return ids[0] if ids and ids[0] else None
+
+
+def is_playlist(source: str) -> bool:
+    return playlist_id(source) is not None
+
+
+def playlist_url(source: str) -> str:
+    pid = playlist_id(source)
+    if not pid:
+        raise ValueError(f"Not a playlist link: {source}")
+    return f"https://www.youtube.com/playlist?list={pid}"
+
+
+# -- listing cache ----------------------------------------------------------------------
+
+def _source_url(source: str) -> str:
+    return playlist_url(source) if is_playlist(source) else channel_videos_url(source)
+
+
+def _listing_cache(source: str) -> Path:
+    key = re.sub(r"[^a-z0-9]+", "_", _source_url(source).lower())[-80:]
     return default_cache_root() / "youtube" / f"{key}.json"
+
+
+def list_source(source: str, refresh: bool = False, cookies_from_browser: Optional[str] = None,
+                log: Optional[Log] = None) -> tuple:
+    """``(title, videos)`` of a channel or playlist (cached for a few hours).
+    ``title`` is the playlist title (None for a channel)."""
+    path = _listing_cache(source)
+    if not refresh and path.exists() and time.time() - path.stat().st_mtime < LISTING_TTL_S:
+        with open(path) as f:
+            data = json.load(f)
+        if isinstance(data, list):  # cache written by an older version
+            data = {"title": None, "videos": data}
+        return data.get("title"), [ChannelVideo(**d) for d in data["videos"]]
+    meta: dict = {}
+    it = iter_playlist_videos(source, cookies_from_browser, meta) if is_playlist(source) \
+        else iter_channel_videos(source, cookies_from_browser)
+    videos = []
+    for v in it:
+        if usable(v):
+            videos.append(v)
+        if log and len(videos) % 100 == 0 and videos:
+            log(f"  ...{len(videos)} videos listed")
+    title = meta.get("title")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "w") as f:
+        json.dump({"title": title, "videos": [asdict(v) for v in videos]}, f)
+    return title, videos
 
 
 def list_channel_videos(channel: str, refresh: bool = False, cookies_from_browser: Optional[str] = None,
                         log: Optional[Log] = None) -> list:
     """All videos of the channel (cached for a few hours)."""
-    path = _listing_cache(channel)
-    if not refresh and path.exists() and time.time() - path.stat().st_mtime < LISTING_TTL_S:
-        with open(path) as f:
-            return [ChannelVideo(**d) for d in json.load(f)]
-    videos = []
-    for v in iter_channel_videos(channel, cookies_from_browser):
-        videos.append(v)
-        if log and len(videos) % 100 == 0:
-            log(f"  ...{len(videos)} videos listed")
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with open(path, "w") as f:
-        json.dump([asdict(v) for v in videos], f)
-    return videos
+    return list_source(channel, refresh, cookies_from_browser, log)[1]
 
 
 # -- chapters -------------------------------------------------------------------------
 
 @dataclass
 class Chapter:
-    first: float
-    last: float
+    first: Optional[float]   # chapter numbers; None for a playlist video without one
+    last: Optional[float]
     video: ChannelVideo
-    alternates: list = field(default_factory=list)  # other uploads of the same chapter (older)
+    alternates: list = field(default_factory=list)  # other uploads of the same chapter
+
+    @property
+    def numbered(self) -> bool:
+        return self.first is not None
+
+    @property
+    def position(self) -> int:
+        """1-based position in the playlist / channel list."""
+        return self.video.index + 1
 
     @property
     def label(self) -> str:
-        return chapter_label(self.first, self.last)
+        return chapter_label(self.first, self.last) if self.numbered else f"#{self.position:03d}"
 
-    def pdf_name(self, series: str) -> str:
-        return safe_filename(f"{series} - Chapter {self.label}") + ".pdf"
+    @property
+    def display(self) -> str:
+        return f"Chapter {self.label}" if self.numbered else f"Video {self.position}"
+
+    def pdf_name(self, name: str) -> str:
+        if self.numbered:
+            return safe_filename(f"{name} - Chapter {self.label}") + ".pdf"
+        title = safe_filename(self.video.title)[:80].rstrip(" .")
+        return safe_filename(f"{name} - {self.position:03d} - {title}") + ".pdf"
+
+
+def sort_items(items: list) -> list:
+    """By chapter number when every item has one, otherwise in list order."""
+    if items and all(c.numbered for c in items):
+        return sorted(items, key=lambda c: (c.first, c.last))
+    return sorted(items, key=lambda c: c.video.index)
 
 
 def find_chapters(videos: Iterable[ChannelVideo], series: str) -> list:
@@ -213,12 +337,36 @@ def parse_selection(spec: str) -> list:
 
 
 def select_chapters(chapters: list, spec: Optional[str] = None, latest: Optional[int] = None) -> list:
+    """Filter by chapter ranges (``spec``) and/or keep the ``latest`` N: the N
+    highest chapter numbers, or for videos without numbers the last N of the
+    playlist."""
     if spec:
         ranges = parse_selection(spec)
-        chapters = [c for c in chapters if any(c.first <= hi and c.last >= lo for lo, hi in ranges)]
+        chapters = [c for c in chapters if c.numbered and any(c.first <= hi and c.last >= lo for lo, hi in ranges)]
+    chapters = sort_items(chapters)
     if latest:
-        chapters = sorted(chapters, key=lambda c: (c.first, c.last))[-int(latest):]
+        chapters = chapters[-int(latest):]
     return chapters
+
+
+def playlist_items(videos: Iterable[ChannelVideo], series: Optional[str] = None) -> list:
+    """What to convert from a playlist: the chapters of ``series`` if given,
+    otherwise every video (a chapter number is read from the title when there
+    is one; the first occurrence of a repeated chapter is used)."""
+    videos = [v for v in videos if usable(v)]
+    if series:
+        return find_chapters(videos, series)
+    items, by_key = [], {}
+    for v in sorted(videos, key=lambda v: v.index):
+        rng = parse_any_chapter(v.title)
+        if rng is None:
+            items.append(Chapter(None, None, v))
+        elif rng in by_key:
+            by_key[rng].alternates.append(v)
+        else:
+            by_key[rng] = Chapter(rng[0], rng[1], v)
+            items.append(by_key[rng])
+    return sort_items(items)
 
 
 def latest_chapters(channel: str, series: str, n: int, cookies_from_browser: Optional[str] = None,
@@ -234,6 +382,8 @@ def latest_chapters(channel: str, series: str, n: int, cookies_from_browser: Opt
     found_at = None
     source = videos if videos is not None else iter_channel_videos(channel, cookies_from_browser)
     for v in source:
+        if not usable(v):
+            continue
         seen.append(v)
         rng = parse_chapter(v.title, series)
         if rng is not None:
@@ -247,6 +397,37 @@ def latest_chapters(channel: str, series: str, n: int, cookies_from_browser: Opt
         if log and len(seen) % 100 == 0:
             log(f"  ...{len(seen)} videos scanned")
     return select_chapters(find_chapters(seen, series), latest=n)
+
+
+@dataclass
+class Selection:
+    name: str                 # used for the output folder and the PDF names
+    source: str
+    kind: str                 # "channel" | "playlist"
+    items: list               # Chapter objects, in output order
+    listed: Optional[int] = None  # how many videos were looked at
+
+
+def gather(source: str, series: Optional[str] = None, spec: Optional[str] = None,
+           latest: Optional[int] = None, name: Optional[str] = None, refresh: bool = False,
+           cookies_from_browser: Optional[str] = None, log: Optional[Log] = None) -> Selection:
+    """Find what to convert, from a channel (series title required) or a
+    playlist (series title optional)."""
+    series = (series or "").strip() or None
+    name = (name or "").strip() or None
+    if is_playlist(source):
+        title, videos = list_source(source, refresh, cookies_from_browser, log)
+        items = select_chapters(playlist_items(videos, series), spec, latest)
+        label = name or series or (title or "").strip() or f"Playlist {playlist_id(source)}"
+        return Selection(safe_filename(label), source, "playlist", items, len(videos))
+    if not series:
+        raise ValueError("A series title is needed for a channel (or give a playlist link instead).")
+    if latest and not spec:
+        items = latest_chapters(source, series, latest, cookies_from_browser, log=log)
+        return Selection(safe_filename(name or series), source, "channel", items)
+    videos = list_channel_videos(source, refresh, cookies_from_browser, log)
+    items = select_chapters(find_chapters(videos, series), spec, latest)
+    return Selection(safe_filename(name or series), source, "channel", items, len(videos))
 
 
 # -- download + convert ---------------------------------------------------------------------
@@ -338,15 +519,16 @@ def series_folder(out_dir: str, series: str) -> Path:
     return Path(out_dir).expanduser() / safe_filename(series)
 
 
-def process_chapter(ch: Chapter, series: str, out_dir: str, settings: Optional[Settings] = None,
+def process_chapter(ch: Chapter, name: str, out_dir: str, settings: Optional[Settings] = None,
                     keep_videos: bool = False, force: bool = False, height: int = TARGET_HEIGHT,
                     cookies_from_browser: Optional[str] = None, progress: ProgressFn = None,
                     downloader: Optional[Callable] = None) -> ChapterResult:
-    """Download one chapter and turn it into a PDF."""
+    """Download one chapter (or playlist video) and turn it into a PDF named
+    after ``name`` in ``<out_dir>/<name>/``."""
     downloader = downloader or download_video
     t0 = time.time()
-    folder = series_folder(out_dir, series)
-    pdf = folder / ch.pdf_name(series)
+    folder = series_folder(out_dir, name)
+    pdf = folder / ch.pdf_name(name)
     res = ChapterResult(chapter=ch.label, title=ch.video.title, url=ch.video.url, status="failed", pdf=str(pdf))
     if pdf.exists() and not force:
         res.status = "exists"
@@ -395,7 +577,7 @@ def default_settings() -> Settings:
     return Settings(page_size="uniform", fill="auto", dpi=150)
 
 
-def write_report(results: list, folder: Path, series: str, channel: str) -> Path:
+def write_report(results: list, folder: Path, name: str, source: str) -> Path:
     folder.mkdir(parents=True, exist_ok=True)
     path = folder / "report.json"
     old = {}
@@ -408,6 +590,6 @@ def write_report(results: list, folder: Path, series: str, channel: str) -> Path
         if r.status != "exists" or r.chapter not in old:
             old[r.chapter] = asdict(r)
     with open(path, "w") as f:
-        json.dump({"series": series, "channel": channel, "updated": time.strftime("%Y-%m-%d %H:%M:%S"),
+        json.dump({"name": name, "source": source, "updated": time.strftime("%Y-%m-%d %H:%M:%S"),
                    "chapters": [old[k] for k in sorted(old)]}, f, indent=1)
     return path

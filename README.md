@@ -19,7 +19,7 @@ offline, and nothing is uploaded anywhere.
 4. [Searchable PDF with OCR (optional)](#4-searchable-pdf-with-ocr-optional)
 5. [About ffmpeg](#5-about-ffmpeg)
 6. [Command line (fully automatic)](#6-command-line-fully-automatic)
-   - [A whole series from a YouTube channel (yt2book)](#a-whole-series-from-a-youtube-channel-yt2book)
+   - [A whole series from a YouTube channel or playlist (yt2book)](#a-whole-series-from-a-youtube-channel-or-playlist-yt2book)
 7. [How it works](#7-how-it-works)
 8. [Troubleshooting and tips](#8-troubleshooting-and-tips)
 9. [Known limitations](#9-known-limitations)
@@ -241,7 +241,7 @@ Useful options (see `video2book --help` for all):
 | `--step N` | Analyse every Nth frame (faster first run on long 60 fps videos) |
 | `--no-dedup`, `--no-cache`, `--cache-dir DIR` | ... |
 
-### A whole series from a YouTube channel (yt2book)
+### A whole series from a YouTube channel or playlist (yt2book)
 
 If a channel publishes a series as one video per chapter, titled like
 **"Miss Forensics (Chapter 142)"**, Video2Book can fetch the chapters and make
@@ -254,9 +254,32 @@ yt2book @RuiNemesys "Miss Forensics"                                       # eve
 yt2book @RuiNemesys "Miss Forensics" --list                                # just show what's there
 ```
 
+**From a playlist:** give the playlist link instead of the channel (a link to
+a video *in* the playlist, containing `&list=...`, works too). The series title
+is optional: without it, every video of the playlist becomes a PDF.
+
+```bash
+yt2book "https://www.youtube.com/playlist?list=PL..."                  # every video of the playlist
+yt2book "https://www.youtube.com/playlist?list=PL..." --latest 3       # only the 3 latest
+yt2book "https://www.youtube.com/playlist?list=PL..." "Miss Forensics" # only that series' videos
+yt2book "https://www.youtube.com/playlist?list=PL..." --name "My book" # choose the folder / file name
+```
+
+* Videos whose title has a chapter number ("Chapter 12", "Ch. 12", "Ep 12") are
+  ordered by it and the PDFs are named `<name> - Chapter 012.pdf`. Videos without
+  one keep the playlist order and are named `<name> - 007 - <video title>.pdf`
+  (007 = position in the playlist).
+* `--latest N` takes the N highest chapter numbers; for videos without chapter
+  numbers, the last N videos of the playlist (playlists normally list the
+  oldest first). `--chapters 10-20` needs chapter numbers in the titles.
+* The name used for the folder and files is the series title if you give one,
+  otherwise the playlist's title (or `--name`).
+* Deleted and private videos in the playlist are skipped.
+
 (From the launchers' installation, the command is `.venv/bin/yt2book` on
 macOS/Linux and `.venv\Scripts\yt2book` on Windows.) The same is available in
-the web app: switch the left panel from **Single video** to **YouTube series**.
+the web app: switch the left panel from **Single video** to **YouTube series**
+and paste a channel or a playlist link.
 
 * Titles are matched loosely: `Miss Forensics - Ch. 12`, `【Miss Forensics】Chapter 12`,
   `Miss Forensics (Chapter 12-13)` all count. A different series with a longer

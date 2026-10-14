@@ -234,3 +234,106 @@ def test_yt_dlp_uses_our_choice():
     with YoutubeDL({"format": selector, "quiet": True, "simulate": True}) as ydl:
         out = ydl.process_ie_result(info, download=False)
     assert out["format_id"] == "137" and quality(out) == 1080
+
+
+# -- playlists --------------------------------------------------------------------------
+
+from video2book.youtube import (gather, is_playlist, parse_any_chapter, playlist_id,  # noqa: E402
+                                playlist_items, playlist_url)
+
+PL = "PLx1y2z3a4b5c6d7e8f9g0h1"
+
+
+def test_playlist_links():
+    assert playlist_id(f"https://www.youtube.com/playlist?list={PL}") == PL
+    assert playlist_id(f"https://www.youtube.com/watch?v=abc123&list={PL}&index=4") == PL
+    assert playlist_id(f"youtube.com/playlist?list={PL}") == PL
+    assert playlist_id(PL) == PL
+    assert playlist_url(f"https://youtu.be/abc123?list={PL}") == f"https://www.youtube.com/playlist?list={PL}"
+    for channel in ("@RuiNemesys", "https://www.youtube.com/@RuiNemesys", "https://www.youtube.com/@RuiNemesys/videos",
+                    "https://www.youtube.com/watch?v=abc123"):
+        assert not is_playlist(channel)
+
+
+@pytest.mark.parametrize("title,expected", [
+    ("Miss Forensics (Chapter 142)", (142, 142)),
+    ("Some Other Series - Ep. 3", (3, 3)),
+    ("Ch 10-11 | Doctor Rebirth", (10, 11)),
+    ("Episode 4: the trial", (4, 4)),
+    ("Behind the scenes", None),
+    ("Next step 5", None),
+])
+def test_parse_any_chapter(title, expected):
+    assert parse_any_chapter(title) == expected
+
+
+def pl_videos(titles):
+    return [ChannelVideo(id=f"p{i}", title=t, url=f"https://www.youtube.com/watch?v=p{i}", index=i)
+            for i, t in enumerate(titles)]
+
+
+def test_playlist_items_with_chapter_numbers():
+    vids = pl_videos(["Miss Forensics (Chapter 3)", "Miss Forensics (Chapter 1)", "[Deleted video]",
+                      "Miss Forensics (Chapter 2)", "Miss Forensics (Chapter 2) reupload", "[Private video]"])
+    items = playlist_items(vids)
+    assert [c.label for c in items] == ["001", "002", "003"]              # chapter order, not playlist order
+    assert items[1].video.id == "p3" and [a.id for a in items[1].alternates] == ["p4"]
+    assert [c.label for c in select_chapters(items, latest=2)] == ["002", "003"]
+    assert items[0].pdf_name("Miss Forensics") == "Miss Forensics - Chapter 001.pdf"
+
+
+def test_playlist_items_without_chapter_numbers():
+    vids = pl_videos(["Intro: who is she?", "The first case", "[Deleted video]", "A new body", "Finale"])
+    items = playlist_items(vids)
+    assert [c.video.title for c in items] == ["Intro: who is she?", "The first case", "A new body", "Finale"]
+    assert [c.position for c in items] == [1, 2, 4, 5]                    # positions in the playlist
+    assert [c.video.title for c in select_chapters(items, latest=2)] == ["A new body", "Finale"]
+    assert items[0].pdf_name("My list") == "My list - 001 - Intro who is she.pdf"
+    assert items[0].display == "Video 1" and items[0].label == "#001"
+    assert select_chapters(items, "1-3") == []                            # ranges need chapter numbers
+
+
+def test_playlist_items_filtered_by_series():
+    vids = pl_videos(["Miss Forensics (Chapter 5)", "Doctor Rebirth (Chapter 9)", "Miss Forensics (Chapter 6)"])
+    assert [c.label for c in playlist_items(vids, "Miss Forensics")] == ["005", "006"]
+
+
+def fake_playlist(titles, playlist_title="Miss Forensics - all chapters"):
+    def it(source, cookies=None, meta=None):
+        if meta is not None:
+            meta["title"] = playlist_title
+        return iter(pl_videos(titles))
+    return it
+
+
+def test_gather_playlist_and_channel_rules(monkeypatch, cache_dir):
+    monkeypatch.setenv("VIDEO2BOOK_CACHE", cache_dir)
+    monkeypatch.setattr(yt, "iter_playlist_videos",
+                        fake_playlist(["Miss Forensics (Chapter 7)", "Miss Forensics (Chapter 8)",
+                                       "Doctor Rebirth (Chapter 1)"]))
+    url = f"https://www.youtube.com/playlist?list={PL}"
+    sel = gather(url, refresh=True)
+    assert sel.kind == "playlist" and sel.listed == 3
+    assert sel.name == "Miss Forensics - all chapters"                    # playlist title
+    assert [c.label for c in sel.items] == ["001", "007", "008"]           # every video, by chapter
+    sel = gather(url, "Miss Forensics", latest=1)                         # cached listing, series filter
+    assert [c.label for c in sel.items] == ["008"] and sel.name == "Miss Forensics"
+    assert gather(url, name="Mine").name == "Mine"
+    with pytest.raises(ValueError):
+        gather("@RuiNemesys")                                              # a channel needs a series
+
+
+def test_cli_playlist_without_series(fake_downloader, tmp_path, monkeypatch, cache_dir, capsys):
+    from video2book import yt_cli
+    monkeypatch.setenv("VIDEO2BOOK_CACHE", cache_dir)
+    monkeypatch.setattr(yt, "iter_playlist_videos",
+                        fake_playlist(["Prologue", "The lab", "The verdict"], "My Comic"))
+    monkeypatch.setattr(yt, "download_video", fake_downloader)
+    url = f"https://www.youtube.com/watch?v=zzz&list={PL}"
+    assert yt_cli.main([url, "--list", "--refresh"]) == 0
+    assert "3 video(s)" in capsys.readouterr().out
+    assert yt_cli.main([url, "--latest", "2", "-o", str(tmp_path)]) == 0
+    folder = tmp_path / "My Comic"
+    assert sorted(p.name for p in folder.glob("*.pdf")) == ["My Comic - 002 - The lab.pdf",
+                                                            "My Comic - 003 - The verdict.pdf"]
+    assert yt_cli.main(["@RuiNemesys"]) == 2                               # channel without series
