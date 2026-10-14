@@ -298,10 +298,26 @@ class Chapter:
 
 
 def sort_items(items: list) -> list:
-    """By chapter number when every item has one, otherwise in list order."""
-    if items and all(c.numbered for c in items):
-        return sorted(items, key=lambda c: (c.first, c.last))
-    return sorted(items, key=lambda c: c.video.index)
+    """Numbered items by chapter number. An item without a number (Prologue,
+    Extra...) keeps its place after the numbered item it follows in the list
+    (or first, if it comes before any numbered one), so one prologue doesn't
+    turn the whole playlist into list order."""
+    in_list = sorted(items, key=lambda c: c.video.index)
+    numbered = sorted((c for c in items if c.numbered), key=lambda c: (c.first, c.last))
+    if len(numbered) == len(items):
+        return numbered
+    after: dict = {}          # id(numbered item) or None -> unnumbered items following it
+    prev = None
+    for c in in_list:
+        if c.numbered:
+            prev = c
+        else:
+            after.setdefault(id(prev) if prev else None, []).append(c)
+    out = list(after.get(None, []))
+    for c in numbered:
+        out.append(c)
+        out.extend(after.get(id(c), []))
+    return out
 
 
 def find_chapters(videos: Iterable[ChannelVideo], series: str) -> list:

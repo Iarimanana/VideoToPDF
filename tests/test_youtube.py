@@ -337,3 +337,20 @@ def test_cli_playlist_without_series(fake_downloader, tmp_path, monkeypatch, cac
     assert sorted(p.name for p in folder.glob("*.pdf")) == ["My Comic - 002 - The lab.pdf",
                                                             "My Comic - 003 - The verdict.pdf"]
     assert yt_cli.main(["@RuiNemesys"]) == 2                               # channel without series
+
+
+def test_playlist_with_prologue_keeps_chapter_order():
+    """Real case (RuiNemesys 'Private photos'): a prologue without a number and
+    chapters uploaded out of order; chapter 5 missing."""
+    from video2book.youtube import playlist_items
+    pl = videos(["Private Photos (Prologue) Introduction| #girlslove", "Private photos (Chapter 01) | #gl",
+                 "Private photos (Chapter 03) | #gl", "Private photos (Chapter 02) | #girlslove",
+                 "Private photos (Chapter 4) | #yuri", "Private Photos (Chapter 6) | #gl"])
+    items = playlist_items(pl)
+    assert [c.display for c in items] == ["Video 1", "Chapter 001", "Chapter 002", "Chapter 003",
+                                          "Chapter 004", "Chapter 006"]
+    assert [c.label for c in select_chapters(items, latest=3)] == ["003", "004", "006"]
+    assert [c.label for c in select_chapters(items, "2-4")] == ["002", "003", "004"]
+    extra = playlist_items(pl + videos(["Private photos Special episode"])[0:0] + [
+        ChannelVideo(id="x", title="Private photos - Special", url="u", index=9)])
+    assert extra[-1].display == "Video 10"          # an extra at the end stays at the end
